@@ -23,15 +23,27 @@ python molden2gssorb.py input.molden -o output.INPORB
 
 Default output filename: `<input_basename>.INPORB`
 
-## Supported basis function types
+## SEWARD ordering conventions
 
-| l | Type | Cartesian components | Spherical components | Notes |
-|:---:|:---:|:---:|:---:|------|
-| 0 | s | 1 | 1 | |
-| 1 | p | 3 | — | |
-| 2 | d | 6 | 5 | `[5D]` marker controls spherical |
-| 3 | f | 10 | 7 | `[7F]` marker controls spherical |
-| ≥4 | g/h/i | 15/21/28 | 9/11/13 | `[9G]` etc. markers |
+SEWARD uses **component-first** ordering (`atom → shell → component → contracted function`),
+in contrast to Molden's **contracted-function-first** ordering (`atom → shell → contracted function → component`).
+
+All contracted functions sharing the same angular component are adjacent.
+For example, an O atom with contracted basis (3s,2p,1d):
+
+| | Order |
+|---|------|
+| SEWARD | s1, s2, s3, **px1, px2**, py1, py2, pz1, pz2, dxx, dxy, dxz, dyy, dyz, dzz |
+| Molden | s1, s2, s3, px1, py1, pz1, px2, py2, pz2, dxx, dyy, dzz, dxy, dxz, dyz |
+
+Cartesian component order within each shell follows `lx > ly > lz` descending:
+
+| shell | component order |
+|:---:|------|
+| s | s |
+| p | px, py, pz |
+| d | dxx, dxy, dxz, dyy, dyz, dzz |
+| f | fxxx, fxxy, fxxz, fxyy, fxyz, fxzz, fyyy, fyyz, fyzz, fzzz |
 
 ## Pure-d normalization compensation
 
@@ -43,13 +55,6 @@ script divides the pure d components by √3 so that the resulting INPORB is
 consistent with Molcas's expectation, regardless of the Molden source.
 
 The correction is applied automatically to all Cartesian d shells.
-
-## SEWARD ordering conventions
-
-- Global: atom → shell → component → contracted function
-- Cartesian components: `lx > ly > lz` descending priority
-- d-shell order: dxx, dxy, dxz, dyy, dyz, dzz
-- f-shell order: fxxx, fxxy, fxxz, fxyy, fxyz, fxzz, fyyy, fyyz, fyzz, fzzz
 
 ## Output format
 
