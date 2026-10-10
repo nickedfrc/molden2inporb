@@ -1,6 +1,6 @@
 # molden2inporb
 A simple python-based script that do translation from .molden file to OpenMolcas .InpOrb file, using Cartesian basis functions.
-# molden2gssorb.py
+# molden2inporb.py
 
 Convert Molden orbital files to Molcas INPORB format.
 
