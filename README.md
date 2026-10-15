@@ -3,10 +3,12 @@
 Convert standard Molden molecular orbitals to OpenMolcas **INPORB 2.2**.
 Runs with **Python 3.6 or newer**, using only the standard library.
 
-**默认只需提供 Molden 文件**：自动识别壳层，转换 AO 分量顺序和归一化，
-输出同名 `.INPORB`。无需手写原子编号列表，也无需指定 `--same-atom-order`。
-默认保留 Molden 的原子顺序；如果目标 Molcas 使用不同的原子顺序，可用
-`--target-log` 自动按元素和坐标匹配。
+**Only the Molden file is required by default.** The script automatically detects
+the shells, converts AO component ordering and normalization, and writes an
+`.INPORB` file with the same basename. No manual atom list or `--same-atom-order`
+option is needed. Atom order is preserved by default; if the target Molcas input
+uses a different order, `--target-log` matches atoms automatically by element
+and coordinates.
 
 ## Quick start
 
