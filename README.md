@@ -1,63 +1,240 @@
 # molden2inporb
-A simple python-based script that do translation from .molden file to OpenMolcas .InpOrb file, using Cartesian basis functions.
-# molden2inporb.py
 
-Convert Molden orbital files to Molcas INPORB format.
+Convert standard Molden molecular orbitals to OpenMolcas **INPORB 2.2**.
+Runs with **Python 3.6 or newer**, using only the standard library.
 
-## Features
+**默认只需提供 Molden 文件**：自动识别壳层，转换 AO 分量顺序和归一化，
+输出同名 `.INPORB`。无需手写原子编号列表，也无需指定 `--same-atom-order`。
+默认保留 Molden 的原子顺序；如果目标 Molcas 使用不同的原子顺序，可用
+`--target-log` 自动按元素和坐标匹配。
 
-1. **Basis function reordering**: Converts Molden ordering (contracted function → component)
-   to SEWARD ordering (component → contracted function)
-2. **Cartesian component reordering**: Corrects differences between the Molden standard
-   component order and Molcas's internal `lx > ly > lz` descending convention
-3. **Pure-d normalization compensation**: Divides the three pure d components
-   (dxx, dyy, dzz) by √3 to compensate for differing Cartesian Gaussian
-   normalization conventions between the Molden source and Molcas
-
-## Usage
+## Quick start
 
 ```bash
-python molden2gssorb.py input.molden
-python molden2gssorb.py input.molden -o output.INPORB
+python molden2inporb.py input.molden
 ```
 
-Default output filename: `<input_basename>.INPORB`
+This writes `input.INPORB` beside the input file. The existing explicit-output
+command continues to work:
 
-## SEWARD ordering conventions
+```bash
+python molden2inporb.py input.molden -o output.INPORB
+```
 
-SEWARD uses **component-first** ordering (`atom → shell → component → contracted function`),
-in contrast to Molden's **contracted-function-first** ordering (`atom → shell → contracted function → component`).
+If you already installed the script as `molden2inporb` on your `PATH`, use:
 
-All contracted functions sharing the same angular component are adjacent.
-For example, an O atom with contracted basis (3s,2p,1d):
+```bash
+molden2inporb input.molden
+```
 
-| | Order |
-|---|------|
-| SEWARD | s1, s2, s3, **px1, px2**, py1, py2, pz1, pz2, dxx, dxy, dxz, dyy, dyz, dzz |
-| Molden | s1, s2, s3, px1, py1, pz1, px2, py2, pz2, dxx, dyy, dzz, dxy, dxz, dyz |
+No packages, basis-set names, normalization flags, or atom lists are required
+for the usual case with matching source/target atom order.
 
-Cartesian component order within each shell follows `lx > ly > lz` descending:
+## Compatibility with the original script
 
-| shell | component order |
-|:---:|------|
-| s | s |
-| p | px, py, pz |
-| d | dxx, dxy, dxz, dyy, dyz, dzz |
-| f | fxxx, fxxy, fxxz, fxyy, fxyz, fxzz, fyyy, fyyz, fyzz, fzzz |
+The previous version is preserved as a regression reference from commit
+[`78cf0a8`](https://github.com/nickedfrc/molden2inporb/commit/78cf0a80e365256de23ed6d7d4a3e3b8f313fa55)
+in `tests/fixtures/legacy_molden2inporb.py`.
 
-## Pure-d normalization compensation
+For the previously correct **Cartesian s/p/6D cases**, with matching atom order
+and the same ascending angular-momentum/contraction layout:
 
-For Cartesian d shells, the pure components (dxx, dyy, dzz) have a normalization
-factor of 1/√3 arising from the double factorial (2lx−1)!!. Some programs embed
-this factor in the basis function definition at the integral stage (e.g. Molcas),
-while others carry it in the MO coefficients (common in Molden exports). This
-script divides the pure d components by √3 so that the resulting INPORB is
-consistent with Molcas's expectation, regardless of the Molden source.
+- Both original command forms and the default output filename are unchanged.
+- Atom order is preserved by default. There is no automatic element sorting.
+- The same component-first AO permutation is used.
+- Cartesian `xx`, `yy`, `zz` coefficients still use **division by `sqrt(3)`**,
+  preserving the original floating-point results exactly, rather than replacing
+  division with multiplication by an approximate reciprocal.
+- MO order, occupations, sparse-zero coefficients, and the default
+  occupation-based `#INDEX` assignment are retained.
+- The public helper names `parse_gto_shells`, `build_index_map`,
+  `compute_d_pure_positions`, `parse_molden_mo`, `fmt_es`, `write_coeffs_block`,
+  and `write_gssorb` remain available with their original positional arguments.
+- `[Atoms]` remains unnecessary when no coordinate-based atom matching is requested.
 
-The correction is applied automatically to all Cartesian d shells.
+Tests compare **48 synthetic contraction layouts** against the old implementation
+using exact equality of every converted coefficient and occupation. They also
+check unchanged `#ORB`, `#OCC`, `#OCHR`, and previously valid `#INDEX` output text.
+This is a tested compatibility scope, not a claim that every historical input
+or every quantum-chemistry exporter has been verified.
 
-## Output format
+The entire output file is **not byte-identical**: incorrect metadata/formatting
+is fixed, and the birth-certificate timestamp/process ID naturally varies.
+The intentional corrections are:
 
-- Format: INPORB 2.2
-- 5 coefficients per line (`ES21.14`)
-- Sections: `#INFO`, `#ORB`, `#OCC`, `#OCHR`, `#ONE`, `#INDEX`
+- `#INFO` writes **NBAS then NORB**; the old order failed for rectangular MO sets.
+- `#ONE` uses the actual INPORB 2.2 energy format, **10 fields per line, 12
+  characters per field**, instead of the MO-coefficient format.
+- Zero orbital energies remain zero; no artificial energy spectrum is generated.
+- `#INDEX` row labels wrap from 9 back to 0 after 100 orbitals.
+- Incorrect f/g and spherical transformations are fixed, as detailed below.
+- Malformed/duplicate/out-of-range coefficients, unsupported shells, and beta
+  orbitals produce errors instead of silently writing a misleading file.
+
+## Different atom orders: automatic matching
+
+INPORB coefficients have no atom identities. Their rows must match the target
+SEWARD AO order. If the target geometry lists atoms differently, provide its log:
+
+```bash
+python molden2inporb.py input.molden --target-log target.log
+```
+
+This matches atoms by **element and Cartesian coordinates**, checks the total
+number of AOs and C1 symmetry, and prints the selected source atom IDs. You do
+not need to construct a list yourself. Coordinates must have the same origin
+and orientation; coordinate matching tolerates rounding in the printed log.
+The first coordinate table is used, so use a single-geometry calculation log.
+
+For advanced/manual use, `--atom-order 1,3,2` means that target atoms 1, 2, 3
+correspond to Molden atom IDs 1, 3, 2. It is optional and mutually exclusive with
+`--target-log` and `--same-atom-order`.
+
+`--same-atom-order` explicitly selects the default and is accepted for
+compatibility with the earlier development version; it is never required.
+
+**A Molden file alone cannot reveal a different target input's atom order.**
+The no-option command therefore preserves the input order, which protects
+existing workflows. Atom matching checks coordinates and AO count, not the
+complete target basis: matching radial contractions and angular representation
+remain necessary.
+
+## Basis and AO conventions
+
+The conversion depends on the actual `[GTO]` shells and angular markers, **not
+on whether the basis is named split-valence, cc-pVDZ, cc-pVTZ, or cc-pVQZ**.
+
+### Ordering
+
+Molden uses `atom -> contracted shell -> angular component`.
+SEWARD uses `atom -> angular momentum -> component -> contracted function`.
+The script groups contractions of each angular momentum on each atom; interleaved
+`sp` shells are supported and expanded into their s and p contractions.
+
+For a `(3s,2p,1d)` Cartesian atom:
+
+| Format | AO order |
+|---|---|
+| Molden | s1, s2, s3, px1, py1, pz1, px2, py2, pz2, xx, yy, zz, xy, xz, yz |
+| Molcas | s1, s2, s3, px1, px2, py1, py2, pz1, pz2, xx, xy, xz, yy, yz, zz |
+
+Molcas Cartesian powers are ordered by decreasing x exponent, then decreasing
+y exponent. The f order is:
+
+```text
+xxx, xxy, xxz, xyy, xyz, xzz, yyy, yyz, yzz, zzz
+```
+
+Its source indices in the standard Molden 10F order, starting at zero, are:
+
+```text
+0, 4, 5, 3, 9, 6, 1, 8, 7, 2
+```
+
+The old f permutation was incorrect, and the old g fallback did no reordering.
+
+### Cartesian normalization
+
+For a component with powers `(a,b,c)`, standard Molden coefficients transform as
+
+```text
+C_Molcas = C_Molden / sqrt[(2a-1)!! (2b-1)!! (2c-1)!!]
+```
+
+Here `(-1)!! = 1`. The factors extend the original correct 6D conversion:
+
+| Shell | Component family | Divide coefficient by |
+|---|---|---|
+| s, p | all | 1 |
+| d | xx, yy, zz | sqrt(3) |
+| d | xy, xz, yz | 1 |
+| f | xxx and permutations | sqrt(15) |
+| f | xxy and permutations | sqrt(3) |
+| f | xyz | 1 |
+| g | xxxx and permutations | sqrt(105) |
+| g | xxxy and permutations | sqrt(15) |
+| g | xxyy and permutations | 3 |
+| g | xxyz and permutations | sqrt(3) |
+
+This converts AO conventions; it does not renormalize whole MO vectors.
+The appropriate numerical check is `C.T @ S @ C = I`, using the AO overlap
+matrix, not `C.T @ C = I`. Nonstandard exporter conventions must be checked
+separately; the script cannot infer arbitrary source normalization conventions.
+
+### Spherical shells
+
+Standard real spherical Molden components are ordered
+`0,+1,-1,+2,-2,...`; Molcas d/f/g components are ordered `-l,...,0,...,+l`.
+They are reordered without the Cartesian normalization factors.
+
+Supported markers follow the Molden specification:
+
+| Marker | Meaning |
+|---|---|
+| none | Cartesian 6D/10F/15G |
+| `[5D]` or `[5D7F]` | spherical 5D **and** 7F |
+| `[5D10F]` | spherical 5D, Cartesian 10F |
+| `[7F]` | spherical 7F; d remains Cartesian unless separately specified |
+| `[9G]` | spherical 9G |
+
+The old script treated spherical d as Cartesian during normalization, and did
+not implement these spherical permutations correctly.
+
+## Scope and limitations
+
+- **Python 3.6+**, standard library only. No `math.prod` or zero-width `re.split`.
+- Target **C1**, restricted orbitals; beta/UHF orbitals are rejected.
+- Supported shells: **s, p, d, f, g**, and combined **sp**.
+- Source and target must have the same AO space, radial contractions, contraction
+  order, geometry orientation, and Cartesian/spherical representation.
+- **No basis projection or 5D-to-6D conversion.** Changing representation changes
+  the AO dimension and requires more than coefficient permutation/scaling.
+- h/i and higher shells are rejected; do not assume every element or every
+  member of the cc-pVXZ family falls within the supported angular range.
+- Nonstandard normalization, special ECP/ghost conventions, symmetry-adapted
+  target orbitals, and general-contraction multi-column GTO extensions are not
+  automatically handled.
+- Sparse MO indices retain the original interpretation: omitted entries are
+  zero. The converter cannot distinguish intentionally omitted zeros from an
+  accidentally omitted interior coefficient.
+
+The default `#INDEX` still marks `Occup > 0.5` as inactive (`i`) and the rest as
+secondary (`s`) to preserve original behavior. Natural occupations do **not**
+uniquely define a CASSCF active space. To omit this heuristic:
+
+```bash
+python molden2inporb.py input.molden --no-index
+```
+
+Specify the intended `INACTIVE`, `RAS2`, and `NACTEL` in the target RASSCF input.
+An orbital swap appropriate for SCF orbitals should not automatically be reused
+after importing a differently ordered set of CASSCF orbitals.
+
+## Verification
+
+```bash
+python -W error -m unittest discover -s tests -v
+```
+
+The offline suite covers legacy numerical compatibility and output sections,
+default/explicit CLI usage, Python 3.6 MO parsing, f/g permutations and factors,
+spherical markers, sp shells, automatic atom matching, sparse input, malformed
+input, rectangular dimensions, fixed-width energy fields, and index labels.
+GitHub Actions runs it on Windows/Linux with current Python and in a Python 3.6
+container. All fixtures are synthetic; private molecular input/log files are not
+part of this repository.
+
+The revised converter was additionally checked locally on a 140-AO Cartesian
+cc-pVDZ example: independently calculated `max|C.T @ S @ C - I|` was about
+`2e-10`, and the converted first 35 orbitals matched the target log's printed
+RASSCF coefficients within its four-decimal rounding after allowing a sign
+change for each MO. This is a representation/format check, **not an OpenMolcas
+rerun**. Real high-angular-momentum calculations have not been rerun here.
+
+## Sources
+
+- [Molden format specification](https://www.theochem.ru.nl/molden/molden_format.html)
+- [OpenMolcas Molden export and normalization](https://github.com/Molcas/OpenMolcas/blob/master/src/property_util/molden_interface.F90)
+- [OpenMolcas Cartesian and spherical labels](https://github.com/Molcas/OpenMolcas/blob/master/src/integral_util/make_labels.F90)
+- [INPORB formatting parameters](https://github.com/Molcas/OpenMolcas/blob/master/src/property_util/inporbfmt.F90)
+- [OpenMolcas INPORB writer](https://github.com/Molcas/OpenMolcas/blob/master/src/property_util/wrvec_.F90)
